@@ -40,7 +40,6 @@ try:
 
     # Load and scale base pipe image
     base_pipe = pygame.image.load('perfect pipe up.png').convert_alpha()
-    # Scale width to PIPE_WIDTH, maintain aspect ratio for initial scaling
     pipe_scaled_width = PIPE_WIDTH
     pipe_scaled_height = int(base_pipe.get_height() * (PIPE_WIDTH / base_pipe.get_width()))
     base_pipe = pygame.transform.scale(base_pipe, (pipe_scaled_width, pipe_scaled_height)).convert_alpha()
@@ -48,7 +47,6 @@ try:
     # Slice pipe: Cap (top 20%) and Body (a 1px slice from the body)
     cap_height = int(pipe_scaled_height * 0.20)
     pipe_cap = base_pipe.subsurface((0, 0, pipe_scaled_width, cap_height))
-    # Using row at 90% height to avoid potential transparent pixels at the very bottom
     body_row_y = int(pipe_scaled_height * 0.90)
     pipe_body = base_pipe.subsurface((0, body_row_y, pipe_scaled_width, 1))
 
@@ -61,49 +59,20 @@ except pygame.error as e:
     sys.exit()
 
 # Fonts
-def create_pipe_mask(width, height, is_top, cap_img, body_img):
-    surf = pygame.Surface((width, height), pygame.SRCALPHA)
-    cap_h = cap_img.get_height()
-    if is_top:
-        # Body (stretched)
-        body_h = height - cap_h
-        if body_h > 0:
-            stretched_body = pygame.transform.scale(body_img, (width, body_h))
-            surf.blit(stretched_body, (0, 0))
-        # Cap
-        surf.blit(cap_img, (0, max(0, body_h)))
-    else:
-        # Cap
-        surf.blit(cap_img, (0, 0))
-        # Body (stretched)
-        body_h = height - cap_h
-        if body_h > 0:
-            stretched_body = pygame.transform.scale(body_img, (width, body_h))
-            surf.blit(stretched_body, (0, cap_h))
-    return pygame.mask.from_surface(surf)
-
 def get_font(size, bold=False, scale=True):
     if scale:
         return pygame.font.SysFont('Arial', int(size * SCALE_FACTOR), bold=bold)
     else:
         return pygame.font.SysFont('Arial', int(size), bold=bold)
 
-font_main_size = 36
-font_small_size = 24
-font_title_size = 48
-ui_font_size = 30
-
-font_main = get_font(font_main_size, bold=True)
-font_small = get_font(font_small_size)
-font_title = get_font(font_title_size, bold=True)
-font_ui = get_font(ui_font_size, scale=False)
+font_main = get_font(36, bold=True)
+font_small = get_font(24)
+font_title = get_font(48, bold=True)
+font_ui = get_font(30, scale=False)
 
 def draw_text(text, color, x, y, font=font_main, center=False, max_width=None):
     if max_width and font.size(text)[0] > max_width:
-        # Shrink font to fit
-        current_size = font_title_size # Start with title size or current font size?
-        # Actually, let's just use the font passed in and decrease it.
-        temp_font_size = int(font_title_size * SCALE_FACTOR)
+        temp_font_size = int(48 * SCALE_FACTOR)
         while temp_font_size > 10 and pygame.font.SysFont('Arial', temp_font_size, bold=True).size(text)[0] > max_width:
             temp_font_size -= 2
         font = pygame.font.SysFont('Arial', temp_font_size, bold=True)
@@ -162,19 +131,13 @@ class TextInput:
                 elif event.key == pygame.K_BACKSPACE:
                     self.text = self.text[:-1]
                 else:
-                    # Only allow digits and decimal point
                     if event.unicode.isdigit() or event.unicode == '.':
                         self.text += event.unicode
 
     def draw(self, surface):
-        # Draw label
         label_img = self.font.render(self.label, True, WHITE)
         surface.blit(label_img, (self.rect.x, self.rect.y - 30))
-
-        # Draw box
         pygame.draw.rect(surface, self.color, self.rect, 2)
-
-        # Draw text
         text_img = self.font.render(self.text, True, WHITE)
         surface.blit(text_img, (self.rect.x + 5, self.rect.y + 15))
 
@@ -184,327 +147,184 @@ class TextInput:
         except ValueError:
             return None
 
+class Bird:
+    def __init__(self, x, y, size, gravity):
+        self.center_x = float(x)
+        self.center_y = float(y)
+        self.size = float(size)
+        self.vel = 0.0
+        self.gravity = gravity
+        self.flap_timer = 0
+        self.using_flap_sprite = False
+        self.rect = pygame.Rect(0, 0, int(size), int(size))
+        self.rect.center = (int(self.center_x), int(self.center_y))
+        self.mask = None
+        self.current_rotated_image = None
+
+    def update(self, dt):
+        self.vel += self.gravity
+        self.center_y += self.vel
+        if self.flap_timer > 0:
+            self.flap_timer -= dt
+            self.using_flap_sprite = True
+        else:
+            self.using_flap_sprite = False
+        # Update rect center before rotation
+        self.rect.center = (int(self.center_x), int(self.center_y))
+
+    def flap(self, strength):
+        self.vel = strength
+        self.flap_timer = 0.15
+
+    def prepare(self):
+        sprite = bart_flap if self.using_flap_sprite else bart_no_flap
+        scaled = pygame.transform.scale(sprite, (int(self.size), int(self.size))).convert_alpha()
+        rotation = -self.vel * 3
+        rotation = max(-90, min(rotation, 30))
+        rotated = pygame.transform.rotate(scaled, rotation).convert_alpha()
+        # Anchor the rotation to the current rect center
+        self.rect = rotated.get_rect(center=self.rect.center)
+        self.mask = pygame.mask.from_surface(rotated)
+        self.current_rotated_image = rotated
+
+    def draw(self, surface):
+        if self.current_rotated_image:
+            surface.blit(self.current_rotated_image, self.rect.topleft)
+
+class Pipe:
+    def __init__(self, x, gap_y, gap_height):
+        self.x_float = float(x)
+        self.gap_y = gap_y
+        self.gap_height = gap_height
+        self.passed = False
+
+        # Pre-render top pipe
+        top_height = int(gap_y)
+        self.top_rect = pygame.Rect(int(self.x_float), 0, PIPE_WIDTH, top_height)
+        self.top_image = pygame.Surface((PIPE_WIDTH, top_height), pygame.SRCALPHA).convert_alpha()
+        body_h_top = top_height - cap_height
+        if body_h_top > 0:
+            stretched_body_top = pygame.transform.scale(pipe_body_flipped, (PIPE_WIDTH, body_h_top)).convert_alpha()
+            self.top_image.blit(stretched_body_top, (0, 0))
+        self.top_image.blit(pipe_cap_flipped, (0, max(0, top_height - cap_height)))
+        self.top_mask = pygame.mask.from_surface(self.top_image)
+
+        # Pre-render bottom pipe
+        bottom_y = int(gap_y + gap_height)
+        bottom_height = SCREEN_HEIGHT - bottom_y
+        self.bottom_rect = pygame.Rect(int(self.x_float), bottom_y, PIPE_WIDTH, bottom_height)
+        self.bottom_image = pygame.Surface((PIPE_WIDTH, bottom_height), pygame.SRCALPHA).convert_alpha()
+        self.bottom_image.blit(pipe_cap, (0, 0))
+        body_h_bottom = bottom_height - cap_height
+        if body_h_bottom > 0:
+            stretched_body_bottom = pygame.transform.scale(pipe_body, (PIPE_WIDTH, body_h_bottom)).convert_alpha()
+            self.bottom_image.blit(stretched_body_bottom, (0, cap_height))
+        self.bottom_mask = pygame.mask.from_surface(self.bottom_image)
+
+    def update(self, speed):
+        self.x_float -= speed
+        self.top_rect.x = int(self.x_float)
+        self.bottom_rect.x = int(self.x_float)
+
+    def draw(self, surface):
+        surface.blit(self.top_image, (int(self.x_float), self.top_rect.y))
+        surface.blit(self.bottom_image, (int(self.x_float), self.bottom_rect.y))
+
 def main():
-    # Game state variables
     state = STATE_TITLE
-    previous_state = STATE_TITLE
-
-    # Starting mechanics (can be changed in debug)
-    FACTORY_GRAVITY = 0.5 * SCALE_FACTOR
-    FACTORY_BIRD_SIZE = 30 * SCALE_FACTOR
-    FACTORY_PIPE_SPEED = 3 * SCALE_FACTOR
-    FACTORY_PIPE_GAP = 350
-    FACTORY_SPEED_INC = 1.0
-
-    start_gravity = FACTORY_GRAVITY
-    start_bird_size = FACTORY_BIRD_SIZE
-    start_pipe_speed = FACTORY_PIPE_SPEED
-    start_pipe_gap = FACTORY_PIPE_GAP
-    start_speed_increase = FACTORY_SPEED_INC
+    FACTORY_GRAVITY, FACTORY_BIRD_SIZE, FACTORY_PIPE_SPEED, FACTORY_PIPE_GAP, FACTORY_SPEED_INC = 0.5 * SCALE_FACTOR, 30 * SCALE_FACTOR, 3 * SCALE_FACTOR, 350, 1.0
+    start_gravity, start_bird_size, start_pipe_speed, start_pipe_gap, start_speed_increase = FACTORY_GRAVITY, FACTORY_BIRD_SIZE, FACTORY_PIPE_SPEED, FACTORY_PIPE_GAP, FACTORY_SPEED_INC
     show_fps = False
 
-    # Bird variables
-    bird_x = 50.0 * SCALE_FACTOR
-    bird_y = float(SCREEN_HEIGHT // 2)
-    bird_width = float(start_bird_size)
-    bird_height = float(start_bird_size)
-    bird_vel = 0.0
-    gravity = start_gravity
-    jump_strength = -8 * SCALE_FACTOR
-    flap_timer = 0
-    using_flap_sprite = False
+    bird, pipes, score = None, [], 0
+    current_pipe_speed, current_pipe_gap, speed_increase_percent = start_pipe_speed, start_pipe_gap, start_speed_increase
+    last_pipe_time = 0
 
-    # Pipe variables
-    pipes = [] # Each element is [top_rect, bottom_rect, passed]
-    last_pipe_time = pygame.time.get_ticks()
-    current_pipe_speed = start_pipe_speed
-
-    score = 0
-    running = True
-
-    # Buttons and Inputs (Fixed size 200x60, relative positions)
     btn_w, btn_h = 200, 60
     start_button = Button(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2, btn_w, btn_h, "Start")
     exit_button = Button(SCREEN_WIDTH // 2, (SCREEN_HEIGHT // 2) + 100, btn_w, btn_h, "Exit", color=EXIT_RED)
     debug_button = Button(60, 40, 100, 40, "Debug", color=(100, 100, 100), text_color=WHITE)
-
     title_button = Button(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2, btn_w + 100, btn_h, "Back to Title Screen")
-
-    # Debug Menu Buttons
     reset_button = Button(SCREEN_WIDTH // 2, SCREEN_HEIGHT - 150, btn_w + 50, btn_h, "Reset to Default", color=YELLOW)
     back_button = Button(SCREEN_WIDTH // 2, SCREEN_HEIGHT - 70, btn_w, btn_h, "Back")
     fps_toggle_btn = Button(SCREEN_WIDTH - 150, 100, 200, 60, "FPS: OFF")
-
-    # Debug inputs
     gravity_input = TextInput(100, 150, 200, 40, "Gravity", round(start_gravity, 3))
     size_input = TextInput(100, 250, 200, 40, "Bird Size", int(start_bird_size))
     speed_input = TextInput(100, 350, 200, 40, "Pipe Speed", int(start_pipe_speed))
     gap_input = TextInput(100, 450, 200, 40, "Pipe Gap", int(start_pipe_gap))
     increase_input = TextInput(100, 550, 200, 40, "Speed Inc %", start_speed_increase)
 
-    current_pipe_gap = start_pipe_gap
-    speed_increase_percent = start_speed_increase
-
     def reset_game():
-        nonlocal bird_y, bird_width, bird_height, bird_vel, gravity, pipes, score, last_pipe_time, flap_timer, using_flap_sprite, current_pipe_speed, current_pipe_gap, speed_increase_percent
-        bird_y = float(SCREEN_HEIGHT // 2)
-        bird_width = float(start_bird_size)
-        bird_height = float(start_bird_size)
-        bird_vel = 0.0
-        gravity = start_gravity
-        pipes = []
-        score = 0
+        nonlocal bird, pipes, score, current_pipe_speed, current_pipe_gap, speed_increase_percent, last_pipe_time
+        bird = Bird(50 * SCALE_FACTOR, SCREEN_HEIGHT // 2, start_bird_size, start_gravity)
+        pipes, score = [], 0
+        current_pipe_speed, current_pipe_gap, speed_increase_percent = float(start_pipe_speed), float(start_pipe_gap), float(start_speed_increase)
         last_pipe_time = pygame.time.get_ticks()
-        flap_timer = 0
-        using_flap_sprite = False
-        current_pipe_speed = float(start_pipe_speed)
-        current_pipe_gap = float(start_pipe_gap)
-        speed_increase_percent = float(start_speed_increase)
 
-    while running:
-        current_time = pygame.time.get_ticks()
-        events = pygame.event.get()
-
+    while True:
+        current_time, events = pygame.time.get_ticks(), pygame.event.get()
         for event in events:
-            if event.type == pygame.QUIT:
-                pygame.quit()
-                sys.exit()
-
+            if event.type == pygame.QUIT: pygame.quit(); sys.exit()
 
         if state == STATE_TITLE:
             for event in events:
-                if start_button.is_clicked(event):
-                    reset_game()
-                    state = STATE_PLAYING
-                if debug_button.is_clicked(event):
-                    state = STATE_DEBUG
-                if exit_button.is_clicked(event):
-                    pygame.quit()
-                    sys.exit()
-
+                if start_button.is_clicked(event): reset_game(); state = STATE_PLAYING
+                if debug_button.is_clicked(event): state = STATE_DEBUG
+                if exit_button.is_clicked(event): pygame.quit(); sys.exit()
             screen.fill(BLACK)
             draw_text("Flabby Bartholomew", WHITE, SCREEN_WIDTH // 2, int(SCREEN_HEIGHT * 0.2), font=font_title, center=True, max_width=SCREEN_WIDTH - 20 * SCALE_FACTOR)
-            start_button.draw(screen)
-            exit_button.draw(screen)
-            debug_button.draw(screen)
-
-            if show_fps:
-                fps_text = f"FPS: {int(clock.get_fps())}"
-                fps_img = font_small.render(fps_text, True, WHITE)
-                screen.blit(fps_img, (SCREEN_WIDTH - fps_img.get_width() - 10, 10))
-
-            pygame.display.flip()
+            start_button.draw(screen); exit_button.draw(screen); debug_button.draw(screen)
 
         elif state == STATE_DEBUG:
             for event in events:
-                gravity_input.handle_event(event)
-                size_input.handle_event(event)
-                speed_input.handle_event(event)
-                gap_input.handle_event(event)
-                increase_input.handle_event(event)
-
-                if fps_toggle_btn.is_clicked(event):
-                    show_fps = not show_fps
-                    fps_toggle_btn.text = f"FPS: {'ON' if show_fps else 'OFF'}"
-
+                gravity_input.handle_event(event); size_input.handle_event(event); speed_input.handle_event(event); gap_input.handle_event(event); increase_input.handle_event(event)
+                if fps_toggle_btn.is_clicked(event): show_fps = not show_fps; fps_toggle_btn.text = f"FPS: {'ON' if show_fps else 'OFF'}"
                 if reset_button.is_clicked(event):
-                    start_gravity = FACTORY_GRAVITY
-                    start_bird_size = FACTORY_BIRD_SIZE
-                    start_pipe_speed = FACTORY_PIPE_SPEED
-                    start_pipe_gap = FACTORY_PIPE_GAP
-                    start_speed_increase = FACTORY_SPEED_INC
+                    start_gravity, start_bird_size, start_pipe_speed, start_pipe_gap, start_speed_increase = FACTORY_GRAVITY, FACTORY_BIRD_SIZE, FACTORY_PIPE_SPEED, FACTORY_PIPE_GAP, FACTORY_SPEED_INC
                     show_fps = False
-
-                    # Update inputs
-                    gravity_input.text = str(round(start_gravity, 3))
-                    size_input.text = str(int(start_bird_size))
-                    speed_input.text = str(int(start_pipe_speed))
-                    gap_input.text = str(int(start_pipe_gap))
-                    increase_input.text = str(start_speed_increase)
+                    gravity_input.text, size_input.text, speed_input.text, gap_input.text, increase_input.text = str(round(start_gravity, 3)), str(int(start_bird_size)), str(int(start_pipe_speed)), str(int(start_pipe_gap)), str(start_speed_increase)
                     fps_toggle_btn.text = "FPS: OFF"
-
                 if back_button.is_clicked(event):
-                    # Update starting values from inputs
-                    val = gravity_input.get_value()
-                    if val is not None: start_gravity = val
-                    val = size_input.get_value()
-                    if val is not None: start_bird_size = val
-                    val = speed_input.get_value()
-                    if val is not None: start_pipe_speed = val
-                    val = gap_input.get_value()
-                    if val is not None: start_pipe_gap = val
-                    val = increase_input.get_value()
-                    if val is not None: start_speed_increase = val
-
+                    start_gravity, start_bird_size, start_pipe_speed, start_pipe_gap, start_speed_increase = gravity_input.get_value() or start_gravity, size_input.get_value() or start_bird_size, speed_input.get_value() or start_pipe_speed, gap_input.get_value() or start_pipe_gap, increase_input.get_value() or start_speed_increase
                     state = STATE_TITLE
-
             screen.fill(BLACK)
             draw_text("Debug Menu", WHITE, SCREEN_WIDTH // 2, 50, font=font_title, center=True)
-
-            gravity_input.draw(screen)
-            size_input.draw(screen)
-            speed_input.draw(screen)
-            gap_input.draw(screen)
-            increase_input.draw(screen)
-
-            fps_toggle_btn.draw(screen)
-            reset_button.draw(screen)
-            back_button.draw(screen)
-
-            if show_fps:
-                # Top right corner
-                fps_text = f"FPS: {int(clock.get_fps())}"
-                fps_img = font_small.render(fps_text, True, WHITE)
-                screen.blit(fps_img, (SCREEN_WIDTH - fps_img.get_width() - 10, 10))
-
-            pygame.display.flip()
+            gravity_input.draw(screen); size_input.draw(screen); speed_input.draw(screen); gap_input.draw(screen); increase_input.draw(screen)
+            fps_toggle_btn.draw(screen); reset_button.draw(screen); back_button.draw(screen)
 
         elif state == STATE_PLAYING:
             for event in events:
-                if event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_SPACE:
-                        bird_vel = jump_strength
-                        flap_timer = 0.15 # seconds
-
-            # Bird physics
-            bird_vel += gravity
-            bird_y += bird_vel
-
-            # Animation
-            if flap_timer > 0:
-                flap_timer -= 1/FPS
-                using_flap_sprite = True
-            else:
-                using_flap_sprite = False
-
-            # Pipe spawning
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE: bird.flap(-8 * SCALE_FACTOR)
+            bird.update(1/FPS)
             if current_time - last_pipe_time > PIPE_FREQUENCY:
-                pipe_height = random.randint(50, SCREEN_HEIGHT - int(current_pipe_gap) - 50)
-                top_rect = pygame.Rect(SCREEN_WIDTH, 0, PIPE_WIDTH, pipe_height)
-                bottom_rect = pygame.Rect(SCREEN_WIDTH, pipe_height + int(current_pipe_gap), PIPE_WIDTH, SCREEN_HEIGHT - pipe_height - int(current_pipe_gap))
-
-                # Create masks for pixel-perfect collision
-                top_mask = create_pipe_mask(PIPE_WIDTH, pipe_height, True, pipe_cap_flipped, pipe_body_flipped)
-                bottom_mask = create_pipe_mask(PIPE_WIDTH, SCREEN_HEIGHT - pipe_height - int(current_pipe_gap), False, pipe_cap, pipe_body)
-
-                # Pre-calculate surfaces for performance
-                body_h_top = pipe_height - cap_height
-                top_body_surf = None
-                if body_h_top > 0:
-                    top_body_surf = pygame.transform.scale(pipe_body_flipped, (PIPE_WIDTH, int(body_h_top))).convert_alpha()
-
-                body_h_bottom = (SCREEN_HEIGHT - pipe_height - int(current_pipe_gap)) - cap_height
-                bottom_body_surf = None
-                if body_h_bottom > 0:
-                    bottom_body_surf = pygame.transform.scale(pipe_body, (PIPE_WIDTH, int(body_h_bottom))).convert_alpha()
-
-                pipes.append({
-                    "top_rect": top_rect,
-                    "bottom_rect": bottom_rect,
-                    "top_mask": top_mask,
-                    "bottom_mask": bottom_mask,
-                    "top_body_surf": top_body_surf,
-                    "bottom_body_surf": bottom_body_surf,
-                    "passed": False,
-                    "x_float": float(SCREEN_WIDTH)
-                })
+                gap_y = random.randint(50, SCREEN_HEIGHT - int(current_pipe_gap) - 50)
+                pipes.append(Pipe(SCREEN_WIDTH, gap_y, current_pipe_gap))
                 last_pipe_time = current_time
-
-            # Move pipes (using floats for smooth movement)
+            for p in pipes: p.update(current_pipe_speed)
+            pipes = [p for p in pipes if p.x_float + PIPE_WIDTH > 0]
+            bird.prepare()
+            if bird.rect.top < 0 or bird.rect.bottom > SCREEN_HEIGHT: state = STATE_GAME_OVER
             for p in pipes:
-                p["x_float"] -= current_pipe_speed
-                p["top_rect"].x = int(p["x_float"])
-                p["bottom_rect"].x = int(p["x_float"])
-
-            # Remove off-screen pipes
-            pipes = [p for p in pipes if p["top_rect"].right > 0]
-
-            # Prepare bird sprite and mask
-            current_bird_sprite = bart_flap if using_flap_sprite else bart_no_flap
-            scaled_bird = pygame.transform.scale(current_bird_sprite, (int(bird_width), int(bird_height))).convert_alpha()
-
-            # Rotate bird based on velocity
-            bird_rotation = -bird_vel * 3
-            bird_rotation = max(-90, min(bird_rotation, 30))
-            rotated_bird = pygame.transform.rotate(scaled_bird, bird_rotation).convert_alpha()
-            rotated_rect = rotated_bird.get_rect(center=(bird_x + bird_width / 2, bird_y + bird_height / 2))
-            bird_mask = pygame.mask.from_surface(rotated_bird)
-
-            # Collision detection (Mask-based)
-            for p in pipes:
-                # Top pipe
-                top_offset = (p["top_rect"].x - rotated_rect.x, p["top_rect"].y - rotated_rect.y)
-                if bird_mask.overlap(p["top_mask"], top_offset):
-                    state = STATE_GAME_OVER
-                # Bottom pipe
-                bottom_offset = (p["bottom_rect"].x - rotated_rect.x, p["bottom_rect"].y - rotated_rect.y)
-                if bird_mask.overlap(p["bottom_mask"], bottom_offset):
-                    state = STATE_GAME_OVER
-
-            if rotated_rect.top < 0 or rotated_rect.bottom > SCREEN_HEIGHT:
-                state = STATE_GAME_OVER
-
-            # Scoring and Growth
-            for p in pipes:
-                if not p["passed"] and bird_x > p["top_rect"].right:
-                    p["passed"] = True
-                    score += 1
-                    # Growth: 5% larger, 5% heavier (proportional)
-                    bird_width *= 1.05
-                    bird_height *= 1.05
-                    gravity *= 1.05
-                    # Dynamic Speed
-                    current_pipe_speed *= (1 + speed_increase_percent / 100)
-
-            # Draw
+                rel_top, rel_bottom = (p.top_rect.x - bird.rect.x, p.top_rect.y - bird.rect.y), (p.bottom_rect.x - bird.rect.x, p.bottom_rect.y - bird.rect.y)
+                if bird.mask.overlap(p.top_mask, rel_top) or bird.mask.overlap(p.bottom_mask, rel_bottom): state = STATE_GAME_OVER
+                if not p.passed and bird.center_x > p.x_float + PIPE_WIDTH:
+                    p.passed = True; score += 1; bird.size *= 1.05; bird.gravity *= 1.05; current_pipe_speed *= (1 + speed_increase_percent / 100)
             screen.fill(BLACK)
-
-            # Draw pipes (using int() for coordinates)
-            for p in pipes:
-                tr = p["top_rect"]
-                br = p["bottom_rect"]
-
-                # Draw top pipe
-                if p["top_body_surf"]:
-                    screen.blit(p["top_body_surf"], (int(tr.x), int(tr.top)))
-                screen.blit(pipe_cap_flipped, (int(tr.x), int(tr.bottom - cap_height)))
-
-                # Draw bottom pipe
-                screen.blit(pipe_cap, (int(br.x), int(br.top)))
-                if p["bottom_body_surf"]:
-                    screen.blit(p["bottom_body_surf"], (int(br.x), int(br.top + cap_height)))
-
-            # Draw bird
-            screen.blit(rotated_bird, rotated_rect.topleft)
-
+            for p in pipes: p.draw(screen)
+            bird.draw(screen)
             draw_text(f"Score: {score}", WHITE, 10 * SCALE_FACTOR, 10 * SCALE_FACTOR, font=font_small)
-
-            if show_fps:
-                fps_text = f"FPS: {int(clock.get_fps())}"
-                fps_img = font_small.render(fps_text, True, WHITE)
-                screen.blit(fps_img, (SCREEN_WIDTH - fps_img.get_width() - 10, 10))
-
-            pygame.display.flip()
 
         elif state == STATE_GAME_OVER:
             for event in events:
-                if title_button.is_clicked(event):
-                    state = STATE_TITLE
-
+                if title_button.is_clicked(event): state = STATE_TITLE
             screen.fill(BLACK)
             draw_text("GAME OVER", WHITE, SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 100 * SCALE_FACTOR, center=True)
             draw_text(f"Final Score: {score}", WHITE, SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 50 * SCALE_FACTOR, center=True)
             title_button.draw(screen)
 
-            if show_fps:
-                fps_text = f"FPS: {int(clock.get_fps())}"
-                fps_img = font_small.render(fps_text, True, WHITE)
-                screen.blit(fps_img, (SCREEN_WIDTH - fps_img.get_width() - 10, 10))
+        if show_fps:
+            fps_img = font_small.render(f"FPS: {int(clock.get_fps())}", True, WHITE)
+            screen.blit(fps_img, (SCREEN_WIDTH - fps_img.get_width() - 10, 10))
+        pygame.display.flip(); clock.tick(FPS)
 
-            pygame.display.flip()
-
-
-        clock.tick(FPS)
-
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__": main()

@@ -2,9 +2,11 @@ import pygame
 import sys
 import random
 import os
+import time
 
 # Initialize Pygame
 pygame.init()
+pygame.mixer.init() # Ensure mixer is initialized before loading music
 
 # Constants (Logical Resolution for SCALED mode)
 SCREEN_WIDTH = 400
@@ -27,8 +29,8 @@ GREEN = (0, 255, 0)
 RED = (255, 0, 0)
 EXIT_RED = (165, 48, 48)
 
-# Set up display with SCALED and DOUBLEBUF for Mac/Retina optimization
-screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SCALED | pygame.DOUBLEBUF)
+# Set up display with SCALED, RESIZABLE, and DOUBLEBUF for Mac/Retina optimization
+screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SCALED | pygame.RESIZABLE | pygame.DOUBLEBUF)
 pygame.display.set_caption("Flabby Bartholomew")
 
 # Config and Persistence
@@ -40,10 +42,11 @@ def load_config():
         try:
             with open(CONFIG_FILE, "r") as f:
                 for line in f:
-                    key, val = line.strip().split("=")
-                    if key == "highscore": config["highscore"] = int(val)
-                    elif key == "show_fps": config["show_fps"] = val == "True"
-                    elif key == "show_hitboxes": config["show_hitboxes"] = val == "True"
+                    if "=" in line:
+                        key, val = line.strip().split("=")
+                        if key == "highscore": config["highscore"] = int(val)
+                        elif key == "show_fps": config["show_fps"] = val == "True"
+                        elif key == "show_hitboxes": config["show_hitboxes"] = val == "True"
         except:
             pass
     return config
@@ -65,7 +68,7 @@ try:
     bart_flap = pygame.image.load('Bart flap.png').convert_alpha()
     bart_no_flap = pygame.image.load('Bart no flap.png').convert_alpha()
 
-    # Window Icon
+    # Window Icon - Use bird.png as priority
     try:
         icon = pygame.image.load('bird.png')
         pygame.display.set_icon(icon)
@@ -78,11 +81,14 @@ try:
         background_img = pygame.image.load('background.png').convert()
         background_img = pygame.transform.scale(background_img, (SCREEN_WIDTH, SCREEN_HEIGHT))
 
-    # Music
-    if os.path.exists('music.mp3'):
-        pygame.mixer.music.load('music.mp3')
-        pygame.mixer.music.play(-1)
-        pygame.mixer.music.set_volume(0.5)
+    # Music with robust loading
+    try:
+        if os.path.exists('music.mp3'):
+            pygame.mixer.music.load('music.mp3')
+            pygame.mixer.music.play(-1)
+            pygame.mixer.music.set_volume(0.5)
+    except Exception as e:
+        print(f"Music could not be loaded: {e}")
 
     # Pipes
     base_pipe = pygame.image.load('perfect pipe up.png').convert_alpha()
@@ -120,6 +126,11 @@ except pygame.error as e:
 def get_font(size, bold=False):
     return pygame.font.SysFont('Arial', int(size), bold=bold)
 
+font_main = get_font(36, bold=True)
+font_small = get_font(24)
+font_title = get_font(48, bold=True)
+font_ui = get_font(30)
+
 class Bird:
     def __init__(self, x, y, size, gravity, jump_strength):
         self.x = float(x)
@@ -131,15 +142,20 @@ class Bird:
         self.jump_strength = float(jump_strength)
         self.flap_timer = 0.0
         self.using_flap_sprite = False
+        # Initialize rect before update_base_sprites
+        self.rect = pygame.Rect(0, 0, int(self.width), int(self.height))
         self.update_base_sprites()
-        self.rect = self.base_no_flap.get_rect(center=(int(self.x), int(self.y)))
+        self.update_rect_pos()
 
     def update_base_sprites(self):
-        # Crisp scaling
-        self.base_flap = pygame.transform.scale(bart_flap, (int(self.width), int(self.height)))
-        self.base_no_flap = pygame.transform.scale(bart_no_flap, (int(self.width), int(self.height)))
+        # Crisp scaling with round
+        w, h = round(self.width), round(self.height)
+        self.base_flap = pygame.transform.scale(bart_flap, (w, h))
+        self.base_no_flap = pygame.transform.scale(bart_no_flap, (w, h))
         self.mask_flap = pygame.mask.from_surface(self.base_flap)
         self.mask_no_flap = pygame.mask.from_surface(self.base_no_flap)
+        self.rect.width = w
+        self.rect.height = h
 
     @property
     def mask(self):
@@ -149,11 +165,16 @@ class Bird:
         self.vel = self.jump_strength
         self.flap_timer = 0.15
 
-    def grow(self):
-        self.width *= 1.02
-        self.height *= 1.02
-        self.gravity *= 1.02
+    def grow(self, growth_percent):
+        factor = 1.0 + (growth_percent / 100.0)
+        self.width *= factor
+        self.height *= factor
+        self.gravity *= factor
         self.update_base_sprites()
+
+    def update_rect_pos(self):
+        self.rect.x = round(self.x - self.width / 2)
+        self.rect.y = round(self.y - self.height / 2)
 
     def update(self, dt):
         self.vel += self.gravity * dt
@@ -165,11 +186,12 @@ class Bird:
         else:
             self.using_flap_sprite = False
 
-        self.rect.center = (int(self.x), int(self.y))
+        self.update_rect_pos()
 
     def draw(self, surface):
         image = self.base_flap if self.using_flap_sprite else self.base_no_flap
-        surface.blit(image, (int(self.rect.x), int(self.rect.y)))
+        # Use round for blit coordinates as requested
+        surface.blit(image, (round(self.rect.x), round(self.rect.y)))
 
 class Pipe:
     def __init__(self, x, y, width, height, is_top, max_pipe_surface):
@@ -185,20 +207,16 @@ class Pipe:
         else:
             self.image = max_pipe_surface.subsurface((0, 0, width, height))
 
-        self.rect = self.image.get_rect(topleft=(int(self.x_float), self.y))
+        self.rect = self.image.get_rect(topleft=(round(self.x_float), self.y))
         self.mask = pygame.mask.from_surface(self.image)
 
     def update(self, dt, speed):
         self.x_float -= speed * dt
-        self.rect.x = int(self.x_float)
+        self.rect.x = round(self.x_float)
 
     def draw(self, surface):
-        surface.blit(self.image, (int(self.rect.x), int(self.rect.y)))
-
-font_main = get_font(36, bold=True)
-font_small = get_font(24)
-font_title = get_font(48, bold=True)
-font_ui = get_font(30)
+        # Use round for blit coordinates as requested
+        surface.blit(self.image, (round(self.rect.x), round(self.rect.y)))
 
 def draw_text(text, color, x, y, font=font_main, center=False, max_width=None):
     if max_width and font.size(text)[0] > max_width:
@@ -241,60 +259,46 @@ class Slider:
         self.min_val = min_val
         self.max_val = max_val
         self.val = initial_val
-        self.handle_rect = pygame.Rect(x + (initial_val - min_val) / (max_val - min_val) * width - 10, y - 10, 20, 30)
+        self.update_handle()
         self.dragging = False
+
+    def update_handle(self):
+        pos_x = self.rect.left + (self.val - self.min_val) / (self.max_val - self.min_val) * self.rect.width
+        self.handle_rect = pygame.Rect(pos_x - 10, self.rect.centery - 15, 20, 30)
 
     def handle_event(self, event):
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            if self.handle_rect.collidepoint(event.pos):
+            if self.handle_rect.collidepoint(event.pos) or self.rect.collidepoint(event.pos):
                 self.dragging = True
+                self.update_val(event.pos[0])
         elif event.type == pygame.MOUSEBUTTONUP:
             self.dragging = False
         elif event.type == pygame.MOUSEMOTION:
             if self.dragging:
-                self.handle_rect.centerx = max(self.rect.left, min(event.pos[0], self.rect.right))
-                rel = (self.handle_rect.centerx - self.rect.left) / self.rect.width
-                self.val = self.min_val + rel * (self.max_val - self.min_val)
+                self.update_val(event.pos[0])
+
+    def update_val(self, mouse_x):
+        rel = (mouse_x - self.rect.left) / self.rect.width
+        rel = max(0, min(1, rel))
+        self.val = self.min_val + rel * (self.max_val - self.min_val)
+        self.update_handle()
 
     def draw(self, surface):
         draw_text(f"{self.label}: {self.val:.2f}", WHITE, self.rect.left, self.rect.top - 25, font=font_small)
         pygame.draw.rect(surface, (100, 100, 100), self.rect)
         pygame.draw.rect(surface, WHITE, self.handle_rect)
 
-class TextInput:
-    def __init__(self, x, y, width, height, label, initial_value):
-        self.rect = pygame.Rect(x, y, width, height)
-        self.label = label
-        self.text = str(initial_value)
-        self.active = False
-        self.color = (150, 150, 150)
-
-    def handle_event(self, event):
-        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            self.active = self.rect.collidepoint(event.pos)
-            self.color = WHITE if self.active else (150, 150, 150)
-        if event.type == pygame.KEYDOWN and self.active:
-            if event.key == pygame.K_BACKSPACE: self.text = self.text[:-1]
-            elif event.unicode.isdigit() or event.unicode == '.': self.text += event.unicode
-
-    def draw(self, surface):
-        draw_text(self.label, WHITE, self.rect.x, self.rect.y - 25, font=font_small)
-        pygame.draw.rect(surface, self.color, self.rect, 2)
-        draw_text(self.text, WHITE, self.rect.x + 5, self.rect.y + 5, font=font_small)
-
-    def get_value(self):
-        try: return float(self.text)
-        except: return None
-
 def main():
     state = STATE_TITLE
+    last_time = time.time()
 
     # Defaults
-    DEFAULT_GRAVITY = 1800.0  # 0.5 * 3600
-    DEFAULT_JUMP = -480.0     # -8 * 60
+    DEFAULT_GRAVITY = 1800.0
+    DEFAULT_JUMP = -480.0
     DEFAULT_SPEED = 300.0
     DEFAULT_GAP = 150.0
     DEFAULT_GROWTH = 2.0
+    DEFAULT_VOLUME = 0.5
 
     current_gravity = DEFAULT_GRAVITY
     current_pipe_speed = DEFAULT_SPEED
@@ -303,9 +307,13 @@ def main():
 
     bird = Bird(50, SCREEN_HEIGHT // 2, 30, current_gravity, DEFAULT_JUMP)
     pipes = []
-    distance_since_last_pipe = PIPE_SPAWN_DISTANCE # Spawn immediately
+    distance_since_last_pipe = PIPE_SPAWN_DISTANCE
     score = 0
     running = True
+
+    # Notification Overlay
+    notification_text = ""
+    notification_timer = 0
 
     # Buttons
     start_btn = Button(SCREEN_WIDTH // 2, 300, 150, 50, "Start")
@@ -313,26 +321,33 @@ def main():
     debug_btn = Button(50, 30, 80, 30, "Debug", color=(100, 100, 100), text_color=WHITE)
     title_btn = Button(SCREEN_WIDTH // 2, 450, 200, 50, "Title Screen")
 
-    # Debug UI
-    speed_input = TextInput(50, 100, 100, 30, "Pipe Speed", DEFAULT_SPEED)
-    gap_input = TextInput(50, 160, 100, 30, "Vert Gap", DEFAULT_GAP)
-    growth_input = TextInput(50, 220, 100, 30, "Growth %", DEFAULT_GROWTH)
-    volume_slider = Slider(50, 300, 300, "Volume", 0.0, 1.0, 0.5)
+    # Debug UI (All Sliders)
+    speed_slider = Slider(50, 100, 300, "Pipe Speed", 100.0, 800.0, DEFAULT_SPEED)
+    gap_slider = Slider(50, 180, 300, "Vert Gap", 100.0, 300.0, DEFAULT_GAP)
+    growth_slider = Slider(50, 260, 300, "Growth %", 0.0, 10.0, DEFAULT_GROWTH)
+    volume_slider = Slider(50, 340, 300, "Music Volume", 0.0, 1.0, DEFAULT_VOLUME)
     back_btn = Button(SCREEN_WIDTH // 2, 500, 100, 40, "Back")
 
     def reset_game():
         nonlocal bird, pipes, score, distance_since_last_pipe, current_gravity, current_pipe_speed, current_pipe_gap, current_growth
+        current_pipe_speed = speed_slider.val
+        current_pipe_gap = gap_slider.val
+        current_growth = growth_slider.val
         current_gravity = DEFAULT_GRAVITY
-        current_pipe_speed = speed_input.get_value() or DEFAULT_SPEED
-        current_pipe_gap = gap_input.get_value() or DEFAULT_GAP
-        current_growth = growth_input.get_value() or DEFAULT_GROWTH
         bird = Bird(50, SCREEN_HEIGHT // 2, 30, current_gravity, DEFAULT_JUMP)
         pipes = []
         distance_since_last_pipe = PIPE_SPAWN_DISTANCE
         score = 0
 
     while running:
-        dt = clock.tick(FPS) / 1000.0
+        # High-Precision DT Calculation
+        now = time.time()
+        dt = now - last_time
+        last_time = now
+
+        # Cap the frame rate
+        clock.tick(FPS)
+
         events = pygame.event.get()
 
         for event in events:
@@ -343,8 +358,12 @@ def main():
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_f:
                     config["show_fps"] = not config["show_fps"]
+                    notification_text = f"FPS {'Enabled' if config['show_fps'] else 'Disabled'}"
+                    notification_timer = 120
                 if event.key == pygame.K_h:
                     config["show_hitboxes"] = not config["show_hitboxes"]
+                    notification_text = f"Hitboxes {'Enabled' if config['show_hitboxes'] else 'Disabled'}"
+                    notification_timer = 120
 
         if state == STATE_TITLE:
             for event in events:
@@ -367,18 +386,18 @@ def main():
 
         elif state == STATE_DEBUG:
             for event in events:
-                speed_input.handle_event(event)
-                gap_input.handle_event(event)
-                growth_input.handle_event(event)
+                speed_slider.handle_event(event)
+                gap_slider.handle_event(event)
+                growth_slider.handle_event(event)
                 volume_slider.handle_event(event)
                 if back_btn.is_clicked(event): state = STATE_TITLE
 
             pygame.mixer.music.set_volume(volume_slider.val)
             screen.fill(BLACK)
             draw_text("Debug Menu", WHITE, SCREEN_WIDTH // 2, 40, font=font_title, center=True)
-            speed_input.draw(screen)
-            gap_input.draw(screen)
-            growth_input.draw(screen)
+            speed_slider.draw(screen)
+            gap_slider.draw(screen)
+            growth_slider.draw(screen)
             volume_slider.draw(screen)
             back_btn.draw(screen)
 
@@ -402,11 +421,12 @@ def main():
                     p.passed = True
                     if p.is_top:
                         score += 1
-                        bird.grow()
+                        bird.grow(current_growth)
                         current_pipe_speed *= (1 + current_growth / 100.0)
 
             pipes = [p for p in pipes if p.rect.right > 0]
 
+            # Collision detection
             for p in pipes:
                 if bird.mask.overlap(p.mask, (p.rect.x - bird.rect.x, p.rect.y - bird.rect.y)):
                     state = STATE_GAME_OVER
@@ -440,6 +460,11 @@ def main():
             draw_text(f"Score: {score}", WHITE, SCREEN_WIDTH // 2, 280, font=font_main, center=True)
             draw_text(f"High Score: {config['highscore']}", YELLOW, SCREEN_WIDTH // 2, 330, font=font_small, center=True)
             title_btn.draw(screen)
+
+        # Notification Overlay
+        if notification_timer > 0:
+            draw_text(notification_text, YELLOW, 10, SCREEN_HEIGHT - 30, font=font_small)
+            notification_timer -= 1
 
         if config["show_fps"]:
             fps_img = font_small.render(f"FPS: {int(clock.get_fps())}", True, WHITE)

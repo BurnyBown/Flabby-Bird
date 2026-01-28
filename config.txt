@@ -1,0 +1,3 @@
+highscore=0
+show_fps=False
+show_hitboxes=False

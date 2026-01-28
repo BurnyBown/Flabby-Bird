@@ -61,32 +61,108 @@ except pygame.error as e:
     sys.exit()
 
 # Fonts
-def create_pipe_mask(width, height, is_top, cap_img, body_img):
-    surf = pygame.Surface((width, height), pygame.SRCALPHA)
-    cap_h = cap_img.get_height()
-    if is_top:
-        # Body (stretched)
-        body_h = height - cap_h
-        if body_h > 0:
-            stretched_body = pygame.transform.scale(body_img, (width, body_h))
-            surf.blit(stretched_body, (0, 0))
-        # Cap
-        surf.blit(cap_img, (0, max(0, body_h)))
-    else:
-        # Cap
-        surf.blit(cap_img, (0, 0))
-        # Body (stretched)
-        body_h = height - cap_h
-        if body_h > 0:
-            stretched_body = pygame.transform.scale(body_img, (width, body_h))
-            surf.blit(stretched_body, (0, cap_h))
-    return pygame.mask.from_surface(surf)
-
 def get_font(size, bold=False, scale=True):
     if scale:
         return pygame.font.SysFont('Arial', int(size * SCALE_FACTOR), bold=bold)
     else:
         return pygame.font.SysFont('Arial', int(size), bold=bold)
+
+class Bird:
+    def __init__(self, x, y, size, gravity, jump_strength):
+        self.x = float(x)
+        self.y = float(y)
+        self.vel = 0.0
+        self.width = float(size)
+        self.height = float(size)
+        self.gravity = float(gravity)
+        self.jump_strength = jump_strength
+        self.flap_timer = 0
+        self.using_flap_sprite = False
+
+        self.update_base_sprites()
+        self.update_rotation(0)
+
+    def update_base_sprites(self):
+        self.base_flap = pygame.transform.scale(bart_flap, (int(self.width), int(self.height))).convert_alpha()
+        self.base_no_flap = pygame.transform.scale(bart_no_flap, (int(self.width), int(self.height))).convert_alpha()
+
+    def jump(self):
+        self.vel = self.jump_strength
+        self.flap_timer = 0.15
+
+    def grow(self, speed_increase_percent):
+        self.width *= 1.05
+        self.height *= 1.05
+        self.gravity *= 1.05
+        self.update_base_sprites()
+
+    def update(self, dt):
+        self.vel += self.gravity
+        self.y += self.vel
+
+        if self.flap_timer > 0:
+            self.flap_timer -= dt
+            self.using_flap_sprite = True
+        else:
+            self.using_flap_sprite = False
+
+        rotation = -self.vel * 3
+        rotation = max(-90, min(rotation, 30))
+        self.update_rotation(rotation)
+
+    def update_rotation(self, angle):
+        base = self.base_flap if self.using_flap_sprite else self.base_no_flap
+        self.rotated_image = pygame.transform.rotate(base, angle).convert_alpha()
+
+        # Calculate center based on float x, y and original width, height
+        center_x = self.x + self.width / 2
+        center_y = self.y + self.height / 2
+
+        # Anchor rotation at center
+        self.rect = self.rotated_image.get_rect(center=(int(center_x), int(center_y)))
+        self.mask = pygame.mask.from_surface(self.rotated_image)
+
+    def draw(self, surface):
+        surface.blit(self.rotated_image, self.rect.topleft)
+
+class Pipe:
+    def __init__(self, x, y, width, height, is_top, cap_img, body_img):
+        self.x_float = float(x)
+        self.y = y
+        self.width = width
+        self.height = height
+        self.is_top = is_top
+        self.passed = False
+
+        # Create full pipe surface once
+        self.image = pygame.Surface((width, height), pygame.SRCALPHA).convert_alpha()
+        cap_h = cap_img.get_height()
+        if is_top:
+            # Body (stretched)
+            body_h = height - cap_h
+            if body_h > 0:
+                stretched_body = pygame.transform.scale(body_img, (width, int(body_h))).convert_alpha()
+                self.image.blit(stretched_body, (0, 0))
+            # Cap
+            self.image.blit(cap_img, (0, max(0, body_h)))
+        else:
+            # Cap
+            self.image.blit(cap_img, (0, 0))
+            # Body (stretched)
+            body_h = height - cap_h
+            if body_h > 0:
+                stretched_body = pygame.transform.scale(body_img, (width, int(body_h))).convert_alpha()
+                self.image.blit(stretched_body, (0, cap_h))
+
+        self.rect = self.image.get_rect(topleft=(int(self.x_float), self.y))
+        self.mask = pygame.mask.from_surface(self.image)
+
+    def update(self, speed):
+        self.x_float -= speed
+        self.rect.x = int(self.x_float)
+
+    def draw(self, surface):
+        surface.blit(self.image, self.rect.topleft)
 
 font_main_size = 36
 font_small_size = 24
@@ -203,19 +279,13 @@ def main():
     start_speed_increase = FACTORY_SPEED_INC
     show_fps = False
 
-    # Bird variables
-    bird_x = 50.0 * SCALE_FACTOR
-    bird_y = float(SCREEN_HEIGHT // 2)
-    bird_width = float(start_bird_size)
-    bird_height = float(start_bird_size)
-    bird_vel = 0.0
-    gravity = start_gravity
+    # Mechanics
     jump_strength = -8 * SCALE_FACTOR
-    flap_timer = 0
-    using_flap_sprite = False
+    current_pipe_gap = start_pipe_gap
+    speed_increase_percent = start_speed_increase
 
-    # Pipe variables
-    pipes = [] # Each element is [top_rect, bottom_rect, passed]
+    bird = Bird(50.0 * SCALE_FACTOR, SCREEN_HEIGHT // 2, start_bird_size, start_gravity, jump_strength)
+    pipes = []
     last_pipe_time = pygame.time.get_ticks()
     current_pipe_speed = start_pipe_speed
 
@@ -242,21 +312,12 @@ def main():
     gap_input = TextInput(100, 450, 200, 40, "Pipe Gap", int(start_pipe_gap))
     increase_input = TextInput(100, 550, 200, 40, "Speed Inc %", start_speed_increase)
 
-    current_pipe_gap = start_pipe_gap
-    speed_increase_percent = start_speed_increase
-
     def reset_game():
-        nonlocal bird_y, bird_width, bird_height, bird_vel, gravity, pipes, score, last_pipe_time, flap_timer, using_flap_sprite, current_pipe_speed, current_pipe_gap, speed_increase_percent
-        bird_y = float(SCREEN_HEIGHT // 2)
-        bird_width = float(start_bird_size)
-        bird_height = float(start_bird_size)
-        bird_vel = 0.0
-        gravity = start_gravity
+        nonlocal bird, pipes, score, last_pipe_time, current_pipe_speed, current_pipe_gap, speed_increase_percent
+        bird = Bird(50.0 * SCALE_FACTOR, SCREEN_HEIGHT // 2, start_bird_size, start_gravity, jump_strength)
         pipes = []
         score = 0
         last_pipe_time = pygame.time.get_ticks()
-        flap_timer = 0
-        using_flap_sprite = False
         current_pipe_speed = float(start_pipe_speed)
         current_pipe_gap = float(start_pipe_gap)
         speed_increase_percent = float(start_speed_increase)
@@ -363,119 +424,59 @@ def main():
             for event in events:
                 if event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_SPACE:
-                        bird_vel = jump_strength
-                        flap_timer = 0.15 # seconds
+                        bird.jump()
 
-            # Bird physics
-            bird_vel += gravity
-            bird_y += bird_vel
-
-            # Animation
-            if flap_timer > 0:
-                flap_timer -= 1/FPS
-                using_flap_sprite = True
-            else:
-                using_flap_sprite = False
+            # Update bird
+            bird.update(1/FPS)
 
             # Pipe spawning
             if current_time - last_pipe_time > PIPE_FREQUENCY:
                 pipe_height = random.randint(50, SCREEN_HEIGHT - int(current_pipe_gap) - 50)
-                top_rect = pygame.Rect(SCREEN_WIDTH, 0, PIPE_WIDTH, pipe_height)
-                bottom_rect = pygame.Rect(SCREEN_WIDTH, pipe_height + int(current_pipe_gap), PIPE_WIDTH, SCREEN_HEIGHT - pipe_height - int(current_pipe_gap))
 
-                # Create masks for pixel-perfect collision
-                top_mask = create_pipe_mask(PIPE_WIDTH, pipe_height, True, pipe_cap_flipped, pipe_body_flipped)
-                bottom_mask = create_pipe_mask(PIPE_WIDTH, SCREEN_HEIGHT - pipe_height - int(current_pipe_gap), False, pipe_cap, pipe_body)
+                # Top pipe
+                top_pipe = Pipe(SCREEN_WIDTH, 0, PIPE_WIDTH, pipe_height, True, pipe_cap_flipped, pipe_body_flipped)
+                # Bottom pipe
+                bottom_pipe = Pipe(SCREEN_WIDTH, pipe_height + int(current_pipe_gap), PIPE_WIDTH, SCREEN_HEIGHT - pipe_height - int(current_pipe_gap), False, pipe_cap, pipe_body)
 
-                # Pre-calculate surfaces for performance
-                body_h_top = pipe_height - cap_height
-                top_body_surf = None
-                if body_h_top > 0:
-                    top_body_surf = pygame.transform.scale(pipe_body_flipped, (PIPE_WIDTH, int(body_h_top))).convert_alpha()
-
-                body_h_bottom = (SCREEN_HEIGHT - pipe_height - int(current_pipe_gap)) - cap_height
-                bottom_body_surf = None
-                if body_h_bottom > 0:
-                    bottom_body_surf = pygame.transform.scale(pipe_body, (PIPE_WIDTH, int(body_h_bottom))).convert_alpha()
-
-                pipes.append({
-                    "top_rect": top_rect,
-                    "bottom_rect": bottom_rect,
-                    "top_mask": top_mask,
-                    "bottom_mask": bottom_mask,
-                    "top_body_surf": top_body_surf,
-                    "bottom_body_surf": bottom_body_surf,
-                    "passed": False,
-                    "x_float": float(SCREEN_WIDTH)
-                })
+                pipes.append(top_pipe)
+                pipes.append(bottom_pipe)
                 last_pipe_time = current_time
 
-            # Move pipes (using floats for smooth movement)
+            # Move pipes
             for p in pipes:
-                p["x_float"] -= current_pipe_speed
-                p["top_rect"].x = int(p["x_float"])
-                p["bottom_rect"].x = int(p["x_float"])
+                p.update(current_pipe_speed)
 
             # Remove off-screen pipes
-            pipes = [p for p in pipes if p["top_rect"].right > 0]
-
-            # Prepare bird sprite and mask
-            current_bird_sprite = bart_flap if using_flap_sprite else bart_no_flap
-            scaled_bird = pygame.transform.scale(current_bird_sprite, (int(bird_width), int(bird_height))).convert_alpha()
-
-            # Rotate bird based on velocity
-            bird_rotation = -bird_vel * 3
-            bird_rotation = max(-90, min(bird_rotation, 30))
-            rotated_bird = pygame.transform.rotate(scaled_bird, bird_rotation).convert_alpha()
-            rotated_rect = rotated_bird.get_rect(center=(bird_x + bird_width / 2, bird_y + bird_height / 2))
-            bird_mask = pygame.mask.from_surface(rotated_bird)
+            pipes = [p for p in pipes if p.rect.right > 0]
 
             # Collision detection (Mask-based)
             for p in pipes:
-                # Top pipe
-                top_offset = (p["top_rect"].x - rotated_rect.x, p["top_rect"].y - rotated_rect.y)
-                if bird_mask.overlap(p["top_mask"], top_offset):
-                    state = STATE_GAME_OVER
-                # Bottom pipe
-                bottom_offset = (p["bottom_rect"].x - rotated_rect.x, p["bottom_rect"].y - rotated_rect.y)
-                if bird_mask.overlap(p["bottom_mask"], bottom_offset):
+                offset = (p.rect.x - bird.rect.x, p.rect.y - bird.rect.y)
+                if bird.mask.overlap(p.mask, offset):
                     state = STATE_GAME_OVER
 
-            if rotated_rect.top < 0 or rotated_rect.bottom > SCREEN_HEIGHT:
+            if bird.rect.top < 0 or bird.rect.bottom > SCREEN_HEIGHT:
                 state = STATE_GAME_OVER
 
             # Scoring and Growth
             for p in pipes:
-                if not p["passed"] and bird_x > p["top_rect"].right:
-                    p["passed"] = True
-                    score += 1
-                    # Growth: 5% larger, 5% heavier (proportional)
-                    bird_width *= 1.05
-                    bird_height *= 1.05
-                    gravity *= 1.05
-                    # Dynamic Speed
-                    current_pipe_speed *= (1 + speed_increase_percent / 100)
+                if not p.passed and bird.x > p.rect.right:
+                    p.passed = True
+                    # Only score once per pipe pair (using the top pipe as the trigger)
+                    if p.is_top:
+                        score += 1
+                        bird.grow(speed_increase_percent)
+                        current_pipe_speed *= (1 + speed_increase_percent / 100)
 
             # Draw
             screen.fill(BLACK)
 
-            # Draw pipes (using int() for coordinates)
+            # Draw pipes
             for p in pipes:
-                tr = p["top_rect"]
-                br = p["bottom_rect"]
-
-                # Draw top pipe
-                if p["top_body_surf"]:
-                    screen.blit(p["top_body_surf"], (int(tr.x), int(tr.top)))
-                screen.blit(pipe_cap_flipped, (int(tr.x), int(tr.bottom - cap_height)))
-
-                # Draw bottom pipe
-                screen.blit(pipe_cap, (int(br.x), int(br.top)))
-                if p["bottom_body_surf"]:
-                    screen.blit(p["bottom_body_surf"], (int(br.x), int(br.top + cap_height)))
+                p.draw(screen)
 
             # Draw bird
-            screen.blit(rotated_bird, rotated_rect.topleft)
+            bird.draw(screen)
 
             draw_text(f"Score: {score}", WHITE, 10 * SCALE_FACTOR, 10 * SCALE_FACTOR, font=font_small)
 

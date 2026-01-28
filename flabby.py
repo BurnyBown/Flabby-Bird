@@ -26,6 +26,7 @@ WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
 YELLOW = (255, 255, 0)
 GREEN = (0, 255, 0)
+EXIT_RED = (165, 48, 48)
 
 # Set up display
 screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
@@ -188,8 +189,9 @@ def main():
 
     # Buttons and Inputs
     start_button = Button(SCREEN_WIDTH // 2, 400 * SCALE_FACTOR, 150 * SCALE_FACTOR, 50 * SCALE_FACTOR, "Start")
+    exit_button = Button(SCREEN_WIDTH // 2, 500 * SCALE_FACTOR, 150 * SCALE_FACTOR, 50 * SCALE_FACTOR, "Exit", color=EXIT_RED)
     title_button = Button(SCREEN_WIDTH // 2, 450 * SCALE_FACTOR, 250 * SCALE_FACTOR, 50 * SCALE_FACTOR, "Back to Title Screen")
-    close_button = Button(SCREEN_WIDTH // 2, 500 * SCALE_FACTOR, 150 * SCALE_FACTOR, 50 * SCALE_FACTOR, "Close")
+    close_button = Button(SCREEN_WIDTH // 2, 500 * SCALE_FACTOR, 150 * SCALE_FACTOR, 50 * SCALE_FACTOR, "Close", color=EXIT_RED)
 
     gravity_input = TextInput(100 * SCALE_FACTOR, 150 * SCALE_FACTOR, 200 * SCALE_FACTOR, 40 * SCALE_FACTOR, "Gravity", gravity)
     size_input = TextInput(100 * SCALE_FACTOR, 250 * SCALE_FACTOR, 200 * SCALE_FACTOR, 40 * SCALE_FACTOR, "Bird Size", bird_width)
@@ -235,10 +237,14 @@ def main():
                 if start_button.is_clicked(event):
                     reset_game()
                     state = STATE_PLAYING
+                if exit_button.is_clicked(event):
+                    pygame.quit()
+                    sys.exit()
 
             screen.fill(BLACK)
             draw_text("Flabby Bartholomew", WHITE, SCREEN_WIDTH // 2, 150 * SCALE_FACTOR, font=font_title, center=True, max_width=SCREEN_WIDTH - 20 * SCALE_FACTOR)
             start_button.draw(screen)
+            exit_button.draw(screen)
             pygame.display.flip()
 
         elif state == STATE_PLAYING:

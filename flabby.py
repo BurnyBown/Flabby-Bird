@@ -4,16 +4,19 @@ import random
 import os
 import time
 
+# Set initial window size for SCALED mode BEFORE pygame.init()
+os.environ['SDL_VIDEO_WINDOW_SIZE'] = '800x1200'
+
 # Initialize Pygame
 pygame.init()
-pygame.mixer.init() # Ensure mixer is initialized before loading music
+pygame.mixer.init()
 
 # Constants (Logical Resolution for SCALED mode)
 SCREEN_WIDTH = 400
 SCREEN_HEIGHT = 600
 FPS = 60
 PIPE_WIDTH = 60
-PIPE_SPAWN_DISTANCE = 250  # Pixels between pipe spawns
+PIPE_SPAWN_DISTANCE = 250
 
 # States
 STATE_TITLE = "TITLE"
@@ -29,8 +32,9 @@ GREEN = (0, 255, 0)
 RED = (255, 0, 0)
 EXIT_RED = (165, 48, 48)
 
-# Set up display with SCALED, RESIZABLE, and DOUBLEBUF for Mac/Retina optimization
-screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SCALED | pygame.RESIZABLE | pygame.DOUBLEBUF)
+# Set up display with SCALED, RESIZABLE, DOUBLEBUF, and VSYNC
+# Logical resolution is 400x600, but it will start at 800x1200 due to SDL_VIDEO_WINDOW_SIZE
+screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SCALED | pygame.RESIZABLE | pygame.DOUBLEBUF, vsync=1)
 pygame.display.set_caption("Flabby Bartholomew")
 
 # Config and Persistence
@@ -64,29 +68,29 @@ clock = pygame.time.Clock()
 
 # Assets
 try:
-    # Use pygame.transform.scale for crisp pixels
     bart_flap = pygame.image.load('Bart flap.png').convert_alpha()
     bart_no_flap = pygame.image.load('Bart no flap.png').convert_alpha()
 
-    # Window Icon - Use bird.png as priority
     try:
         icon = pygame.image.load('bird.png')
         pygame.display.set_icon(icon)
     except:
         pygame.display.set_icon(bart_no_flap)
 
-    # Background
     background_img = None
     if os.path.exists('background.png'):
         background_img = pygame.image.load('background.png').convert()
         background_img = pygame.transform.scale(background_img, (SCREEN_WIDTH, SCREEN_HEIGHT))
 
-    # Music with robust loading
+    # Music with robust loading and specific path
+    music_path = os.path.join(os.path.dirname(__file__), 'music.mp3')
     try:
-        if os.path.exists('music.mp3'):
-            pygame.mixer.music.load('music.mp3')
+        if os.path.exists(music_path):
+            pygame.mixer.music.load(music_path)
             pygame.mixer.music.play(-1)
             pygame.mixer.music.set_volume(0.5)
+        else:
+            print("NOTE: music.mp3 not found. Check local directory.")
     except Exception as e:
         print(f"Music could not be loaded: {e}")
 
@@ -133,22 +137,29 @@ font_ui = get_font(30)
 
 class Bird:
     def __init__(self, x, y, size, gravity, jump_strength):
-        self.x = float(x)
-        self.y = float(y)
+        self.initial_x = float(x)
+        self.initial_y = float(y)
+        self.initial_width = float(size)
+        self.initial_height = float(size)
+        self.initial_gravity = float(gravity)
+        self.initial_jump = float(jump_strength)
+
+        self.x = self.initial_x
+        self.y = self.initial_y
+        self.width = self.initial_width
+        self.height = self.initial_height
+        self.gravity = self.initial_gravity
+        self.jump_strength = self.initial_jump
+
         self.vel = 0.0
-        self.width = float(size)
-        self.height = float(size)
-        self.gravity = float(gravity)
-        self.jump_strength = float(jump_strength)
         self.flap_timer = 0.0
         self.using_flap_sprite = False
-        # Initialize rect before update_base_sprites
+
         self.rect = pygame.Rect(0, 0, int(self.width), int(self.height))
         self.update_base_sprites()
         self.update_rect_pos()
 
     def update_base_sprites(self):
-        # Crisp scaling with round
         w, h = round(self.width), round(self.height)
         self.base_flap = pygame.transform.scale(bart_flap, (w, h))
         self.base_no_flap = pygame.transform.scale(bart_no_flap, (w, h))
@@ -165,11 +176,17 @@ class Bird:
         self.vel = self.jump_strength
         self.flap_timer = 0.15
 
-    def grow(self, growth_percent):
-        factor = 1.0 + (growth_percent / 100.0)
-        self.width *= factor
-        self.height *= factor
-        self.gravity *= factor
+    def apply_growth(self, pipes_passed, growth_percent):
+        # difficulty_scale = (1 + growth_percent/100) ** pipes_passed
+        # User requested 1.02 ** pipes_passed as example, but likely meant to use the growth slider %
+        scale_factor = 1.0 + (growth_percent / 100.0)
+        difficulty_scale = scale_factor ** pipes_passed
+
+        self.width = self.initial_width * difficulty_scale
+        self.height = self.initial_height * difficulty_scale
+        self.gravity = self.initial_gravity * difficulty_scale
+        # user didn't explicitly say to scale jump, but it might be needed for gameplay feel
+        # self.jump_strength = self.initial_jump * difficulty_scale
         self.update_base_sprites()
 
     def update_rect_pos(self):
@@ -190,7 +207,6 @@ class Bird:
 
     def draw(self, surface):
         image = self.base_flap if self.using_flap_sprite else self.base_no_flap
-        # Use round for blit coordinates as requested
         surface.blit(image, (round(self.rect.x), round(self.rect.y)))
 
 class Pipe:
@@ -215,7 +231,6 @@ class Pipe:
         self.rect.x = round(self.x_float)
 
     def draw(self, surface):
-        # Use round for blit coordinates as requested
         surface.blit(self.image, (round(self.rect.x), round(self.rect.y)))
 
 def draw_text(text, color, x, y, font=font_main, center=False, max_width=None):
@@ -283,10 +298,33 @@ class Slider:
         self.val = self.min_val + rel * (self.max_val - self.min_val)
         self.update_handle()
 
+    def reset(self, value):
+        self.val = value
+        self.update_handle()
+
     def draw(self, surface):
         draw_text(f"{self.label}: {self.val:.2f}", WHITE, self.rect.left, self.rect.top - 25, font=font_small)
         pygame.draw.rect(surface, (100, 100, 100), self.rect)
         pygame.draw.rect(surface, WHITE, self.handle_rect)
+
+class Checkbox:
+    def __init__(self, x, y, size, label, initial_val):
+        self.rect = pygame.Rect(x, y, size, size)
+        self.label = label
+        self.val = initial_val
+
+    def handle_event(self, event):
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if self.rect.collidepoint(event.pos):
+                self.val = not self.val
+                return True
+        return False
+
+    def draw(self, surface):
+        pygame.draw.rect(surface, WHITE, self.rect, 2)
+        if self.val:
+            pygame.draw.rect(surface, GREEN, self.rect.inflate(-6, -6))
+        draw_text(self.label, WHITE, self.rect.right + 10, self.rect.centery, font=font_small, center=False)
 
 def main():
     state = STATE_TITLE
@@ -300,12 +338,12 @@ def main():
     DEFAULT_GROWTH = 2.0
     DEFAULT_VOLUME = 0.5
 
-    current_gravity = DEFAULT_GRAVITY
     current_pipe_speed = DEFAULT_SPEED
     current_pipe_gap = DEFAULT_GAP
     current_growth = DEFAULT_GROWTH
+    pipes_passed = 0
 
-    bird = Bird(50, SCREEN_HEIGHT // 2, 30, current_gravity, DEFAULT_JUMP)
+    bird = Bird(50, SCREEN_HEIGHT // 2, 30, DEFAULT_GRAVITY, DEFAULT_JUMP)
     pipes = []
     distance_since_last_pipe = PIPE_SPAWN_DISTANCE
     score = 0
@@ -321,31 +359,33 @@ def main():
     debug_btn = Button(50, 30, 80, 30, "Debug", color=(100, 100, 100), text_color=WHITE)
     title_btn = Button(SCREEN_WIDTH // 2, 450, 200, 50, "Title Screen")
 
-    # Debug UI (All Sliders)
+    # Debug UI
     speed_slider = Slider(50, 100, 300, "Pipe Speed", 100.0, 800.0, DEFAULT_SPEED)
-    gap_slider = Slider(50, 180, 300, "Vert Gap", 100.0, 300.0, DEFAULT_GAP)
-    growth_slider = Slider(50, 260, 300, "Growth %", 0.0, 10.0, DEFAULT_GROWTH)
-    volume_slider = Slider(50, 340, 300, "Music Volume", 0.0, 1.0, DEFAULT_VOLUME)
+    gap_slider = Slider(50, 170, 300, "Vert Gap", 100.0, 300.0, DEFAULT_GAP)
+    growth_slider = Slider(50, 240, 300, "Growth %", 0.0, 10.0, DEFAULT_GROWTH)
+    volume_slider = Slider(50, 310, 300, "Music Volume", 0.0, 1.0, DEFAULT_VOLUME)
+
+    fps_checkbox = Checkbox(50, 360, 25, "Show FPS", config["show_fps"])
+    hitbox_checkbox = Checkbox(200, 360, 25, "Show Hitboxes", config["show_hitboxes"])
+
+    reset_btn = Button(SCREEN_WIDTH // 2, 430, 150, 40, "Reset Defaults", color=(150, 150, 150))
     back_btn = Button(SCREEN_WIDTH // 2, 500, 100, 40, "Back")
 
     def reset_game():
-        nonlocal bird, pipes, score, distance_since_last_pipe, current_gravity, current_pipe_speed, current_pipe_gap, current_growth
+        nonlocal bird, pipes, score, distance_since_last_pipe, current_pipe_speed, current_pipe_gap, current_growth, pipes_passed
         current_pipe_speed = speed_slider.val
         current_pipe_gap = gap_slider.val
         current_growth = growth_slider.val
-        current_gravity = DEFAULT_GRAVITY
-        bird = Bird(50, SCREEN_HEIGHT // 2, 30, current_gravity, DEFAULT_JUMP)
+        pipes_passed = 0
+        bird = Bird(50, SCREEN_HEIGHT // 2, 30, DEFAULT_GRAVITY, DEFAULT_JUMP)
         pipes = []
         distance_since_last_pipe = PIPE_SPAWN_DISTANCE
         score = 0
 
     while running:
-        # High-Precision DT Calculation
         now = time.time()
         dt = now - last_time
         last_time = now
-
-        # Cap the frame rate
         clock.tick(FPS)
 
         events = pygame.event.get()
@@ -358,10 +398,12 @@ def main():
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_f:
                     config["show_fps"] = not config["show_fps"]
+                    fps_checkbox.val = config["show_fps"]
                     notification_text = f"FPS {'Enabled' if config['show_fps'] else 'Disabled'}"
                     notification_timer = 120
                 if event.key == pygame.K_h:
                     config["show_hitboxes"] = not config["show_hitboxes"]
+                    hitbox_checkbox.val = config["show_hitboxes"]
                     notification_text = f"Hitboxes {'Enabled' if config['show_hitboxes'] else 'Disabled'}"
                     notification_timer = 120
 
@@ -390,6 +432,18 @@ def main():
                 gap_slider.handle_event(event)
                 growth_slider.handle_event(event)
                 volume_slider.handle_event(event)
+                if fps_checkbox.handle_event(event):
+                    config["show_fps"] = fps_checkbox.val
+                if hitbox_checkbox.handle_event(event):
+                    config["show_hitboxes"] = hitbox_checkbox.val
+
+                if reset_btn.is_clicked(event):
+                    speed_slider.reset(DEFAULT_SPEED)
+                    gap_slider.reset(DEFAULT_GAP)
+                    growth_slider.reset(DEFAULT_GROWTH)
+                    volume_slider.reset(DEFAULT_VOLUME)
+                    # Don't reset highscore
+
                 if back_btn.is_clicked(event): state = STATE_TITLE
 
             pygame.mixer.music.set_volume(volume_slider.val)
@@ -399,6 +453,9 @@ def main():
             gap_slider.draw(screen)
             growth_slider.draw(screen)
             volume_slider.draw(screen)
+            fps_checkbox.draw(screen)
+            hitbox_checkbox.draw(screen)
+            reset_btn.draw(screen)
             back_btn.draw(screen)
 
         elif state == STATE_PLAYING:
@@ -421,12 +478,13 @@ def main():
                     p.passed = True
                     if p.is_top:
                         score += 1
-                        bird.grow(current_growth)
-                        current_pipe_speed *= (1 + current_growth / 100.0)
+                        pipes_passed += 1
+                        bird.apply_growth(pipes_passed, current_growth)
+                        # Speed also increases proportionally
+                        current_pipe_speed = speed_slider.val * ( (1 + current_growth/100.0) ** pipes_passed )
 
             pipes = [p for p in pipes if p.rect.right > 0]
 
-            # Collision detection
             for p in pipes:
                 if bird.mask.overlap(p.mask, (p.rect.x - bird.rect.x, p.rect.y - bird.rect.y)):
                     state = STATE_GAME_OVER
@@ -461,7 +519,6 @@ def main():
             draw_text(f"High Score: {config['highscore']}", YELLOW, SCREEN_WIDTH // 2, 330, font=font_small, center=True)
             title_btn.draw(screen)
 
-        # Notification Overlay
         if notification_timer > 0:
             draw_text(notification_text, YELLOW, 10, SCREEN_HEIGHT - 30, font=font_small)
             notification_timer -= 1
